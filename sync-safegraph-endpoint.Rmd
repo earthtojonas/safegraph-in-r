@@ -13,7 +13,9 @@ if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
 lapply(packages, require, character.only=TRUE)
 ```
 
-The code below will sync the entire `sg-c19-respones` bucket to a local folder ("`<LOCAL>`"). If you want to sync a subset of directories or specific files, include the `prefix` argument in the `s3sync` command (eg. `prefix = "monthly-patterns"` to sync only that sub-directory).
+The code below will sync the entire `sg-c19-respones` bucket to a local folder ("`<LOCAL>`"). 
+If you want to sync a subset of directories or specific files, include the `prefix` argument in the `s3sync` 
+command (eg. `prefix = "monthly-patterns"` to sync only that sub-directory).
 
 FWIW: As far as I can tell, it is definitely quicker to do this using `AWS CLI`. 
 
