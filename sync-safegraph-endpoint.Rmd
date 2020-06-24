@@ -1,0 +1,33 @@
+---
+title: "Sync safeGraph Data"
+author: "Jessica Williams-Holt"
+date: "6/24/2020"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+packages <- c("aws.s3")  
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+    install.packages(setdiff(packages, rownames(installed.packages())))  
+}  
+lapply(packages, require, character.only=TRUE)
+```
+
+The code below will sync the entire `sg-c19-respones` bucket to a local folder ("`<LOCAL>`"). If you want to sync a subset of directories or specific files, include the `prefix` argument in the `s3sync` command (eg. `prefix = "monthly-patterns"` to sync only that sub-directory).
+
+FWIW: As far as I can tell, it is definitely quicker to do this using `AWS CLI`. 
+
+```{r sync}
+## Set environmental variables
+Sys.setenv("AWS_ACCESS_KEY_ID"     = "<KEY>"
+         , "AWS_SECRET_ACCESS_KEY" = "<SECRET>"
+         , "AWS_DEFAULT_REGION"    = ""
+         , "AWS_S3_ENDPOINT"       = "s3.wasabisys.com"
+)
+
+s3sync(path      = "<LOCAL>",            ## EDIT HERE: Name of an existing local folder to sync to
+       bucket    = "sg-c19-response",    ## Name of S3 bucket to access
+       base_url  = "s3.wasabisys.com",   ## Endpoint
+       region    = "",                   ## Endpoint region
+       direction = "download")
+```
