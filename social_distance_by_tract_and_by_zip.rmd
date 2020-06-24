@@ -1,0 +1,116 @@
+---
+title: "cbg_tract_zip_fips"
+author: "Dana"
+date: "4/4/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(dplyr)
+library(here)
+knitr::opts_knit$set(root.dir = here())
+```
+
+## Merge Survey and Safegraph Data at Census Tract Level
+
+Write code to merge survey and safegraph data at the census tract level. How?
+
+1. Safegraph data has CBG. CBG should have a 12 digit identifier. Tracts are a group of CBG's and are identified by 11 digits (simply drop the last digit of CBG). That gives you a simple way to go from CBG to tract. Aggregate all mobility data to tract level. Here, we need to be careful how we aggregate. Some variables will be simple sums, some will be weighted averages. Please email if you have Qs.
+
+2. Survey has zipcodes. ZIP_TRACT_122019.xls (DT note: I changed the file to be in csv format after copying it to excel, because the xls was still corrupted on my PC. Probably a Linux/Windows discrepency of sort) in the zipcode folder assigns tract numbers to each zipcode and reports the % of residents living in that tract. More details are here: https://www.huduser.gov/portal/datasets/usps_crosswalk.html 
+merge 1 to many using the HUD data relationship file. In the output data, you will have several tracts for each zipcode, with mobility data for each tract, and the weights coming from HUD. Then when we construct mobility measures for a zip, we can construct a weighted average.
+
+```{r definitions}
+TRACT_length = 11
+COUNTY_length = 5
+STATE_length = 2
+```
+
+
+```{r social_distance_by_tract}
+
+# Extracting all csv files and summarize main variables per tract. i.e., summarize accross Census Blocks that are in the same Tract. 
+# This takes a while! If you don't need to - you don't have to. 
+# Instead, you may simply run whatever analyses you want on a single file after the line that reads the csv.
+# If only adding several later days, simply change the "month" and day" ranges to ONLY the ones you add. 
+# e.g., month in 4:4, day in 1:3 will add April 1,2,3 to a new file named all_data_month_4.
+for(month in 2:3){
+  for(day in 1:31){
+    #file name is something like: "./2020/02/13/2020-02-13-social-distancing.csv.gz"
+    directory_name = paste0("2020/", sprintf("%02d", month), "/", sprintf("%02d", day), "/")
+    file_name = paste0(paste("2020", sprintf("%02d", month), sprintf("%02d", day), "social-distancing", sep = "-"), ".csv")
+    print(paste("In month =", month, "day =", day))
+    if(file.exists(paste0("./sg-social-distancing/", directory_name, file_name, ".gz"))){
+      social_distancing_file = read_csv(file = paste0("./sg-social-distancing/", directory_name, file_name, ".gz"))
+      
+      tract_sd = social_distancing_file %>% 
+        mutate(TRACT = substr(x = origin_census_block_group, start = 0, stop = TRACT_length)) %>% 
+        group_by(TRACT) %>% select(TRACT, device_count, distance_traveled_from_home, 
+                                   completely_home_device_count, part_time_work_behavior_devices, 
+                                   full_time_work_behavior_devices) %>% 
+        mutate(device_count = sum(device_count), #sum of number of devices per CBG
+               distance_traveled_from_home = mean(distance_traveled_from_home), #mean of medians
+               completely_home_device_count = sum(completely_home_device_count), #sum of sums
+               part_time_work_behavior_devices = sum(part_time_work_behavior_devices), #sum of number of devices per CBG
+               full_time_work_behavior_devices = sum(full_time_work_behavior_devices)
+        )  %>% 
+        ungroup() %>% 
+        unique() %>% 
+        mutate(Date = paste0("2020-", sprintf("%02d", month), "-", sprintf("%02d", day)))
+      
+      write_csv(x = tract_sd, 
+                path = paste0("./sg-social-distancing-tract/", file_name))
+    }
+  }
+}
+
+```
+
+
+```{r read_zip_tract_file}
+
+zip_tract = read_csv(file = "../Zipcode Data/ZIP_TRACT_122019.csv", col_types = cols(
+  ZIP = col_character(),
+  TRACT = col_character(),
+  RES_RATIO = col_double(),
+  BUS_RATIO = col_double(),
+  OTH_RATIO = col_double(),
+  TOT_RATIO = col_double()
+))
+
+# full_fips = zip_tract %>% mutate(state_fips= substr(x = TRACT, start = 0, stop = STATE_length), 
+#                                  county_fips = substr(x = TRACT, start = 0, stop = COUNTY_length))
+
+
+```
+
+```{r social_distance_by_zip}
+
+for(month in 2:3){
+  for(day in 1:31){
+    file_name = paste0(paste("2020", sprintf("%02d", month), sprintf("%02d", day), "social-distancing", sep = "-"), ".csv")
+    print(paste("In month =", month, "day =", day))
+    if(file.exists(paste0("./sg-social-distancing-tract/", file_name))){
+      
+      tract_social_distance = read_csv(file = paste0("./sg-social-distancing-tract/", file_name))
+      zip_social_distance = tract_social_distance %>% 
+        left_join(y = zip_tract, by = c("TRACT")) %>% 
+        #group_by(TRACT) %>% mutate(a = sum(RES_RATIO)) %>% select(TRACT, a) %>% unique()
+        group_by(ZIP) %>% 
+        mutate(ZIP_device_count = sum(RES_RATIO*device_count), #weighted sum of number of devices per ZIP
+               ZIP_distance_traveled_from_home = sum(RES_RATIO*distance_traveled_from_home), #weighted average of the averages of the median distance travelled :-)
+               ZIP_completely_home_device_count = sum(RES_RATIO*completely_home_device_count), #weighted sum of number of devices per ZIP
+               ZIP_part_time_work_behavior_devices = sum(RES_RATIO*part_time_work_behavior_devices),#weighted sum of number of devices per ZIP
+               ZIP_full_time_work_behavior_devices = sum(RES_RATIO*full_time_work_behavior_devices), #weighted sum of number of devices per ZIP
+               ZIP_res_covered = sum(RES_RATIO)) %>% #coverage. If needed, and this is not 0, can multiply all other by 1/ZIP_res_covered to get the variables so that this will be seen as a representative of the entire zip
+        select(starts_with("ZIP"), Date) %>% unique() %>% ungroup()
+      write_csv(x = zip_social_distance, path = paste0("./sg-social-distancing-zip/", file_name))
+    }
+  }
+}
+
+```
+
+
