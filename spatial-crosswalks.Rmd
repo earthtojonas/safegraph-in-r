@@ -11,6 +11,7 @@ Included:
 2. Census tract to postal zip code. 
 3. Postal zip code to ZCTA. 
 
+
 ### 0. Setup and introduction. 
 
 #### a. Setup. 
@@ -62,6 +63,7 @@ cbg_geo  <- fread(paste0(dat_dir, dat_file))
 As a basis, we will use the ``r dat_file`` available from SafeGraph's [Open Census Data](https://www.safegraph.com/open-census-data) which includes some basic CBG features, including longitude and latitude for the CBG centroids (above). 
 
 You can find more information about the data included from the Open Census Data download (including CBG-level demographics) in the [documentation](https://docs.safegraph.com/docs/open-census-data). 
+
 
 ### 2. Crosswalks. 
 
