@@ -1,0 +1,155 @@
+---
+title: "Spatial Crosswalks"
+author: "Jessica Williams-Holt"
+date: "6/29/2020"
+output: html_document
+---
+
+Included: 
+
+1. Census block group to ZCTA. 
+2. Census tract to postal zip code. 
+3. Postal zip code to ZCTA. 
+
+### 0. Setup and introduction. 
+
+#### a. Setup. 
+
+Start by installing (if needed) or loading packages:  
+
+* `sf` to work with shapefiles. ([cheatsheet](https://github.com/rstudio/cheatsheets/blob/master/sf.pdf)) 
+* `ggmap` works with `ggplot2` for enhanced plotting.  
+* `tiyverse` loads all our favorite packages.  
+* `broom` for converting shape objects to dataframes for plotting.  
+* `data.table` for fast data reading.  
+* `knitr` to render this document in html.  
+* `xtable` for nice printing. 
+
+```{r setup, include = F}
+## packages
+    packages <- c("sf", "ggmap", "raster", "spData", 
+                  "tidyverse", "data.table", "readxl", "broom", "knitr", "xtable", "rmarkdown")
+    if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+        install.packages(setdiff(packages, rownames(installed.packages())), 
+                   repos = "https://ftp.osuosl.org/pub/cran/")  
+    }  
+    lapply(packages, require, character.only = TRUE)
+## directories
+    dat_dir  <- "~/Work/2020.05 SafeGraph/data/"
+```
+
+
+#### b. Introduction. 
+
+SafeGraph data are reported at the census block group (CBG). You can read more about census geographic units at [Census.gov](https://www.census.gov/newsroom/blogs/random-samplings/2014/07/understanding-geographic-relationships-counties-places-tracts-and-more.html). 
+
+This document walks through a few ways to map between CBGs and ZCTAs (Census Bureau geographies) and postal zip codes (US Postal Service areas). Some things to keep in mind: 
+
+* The relationships between these different geographic units is not always exact.  
+* Coverage is not complete. There will be some CBGs, census tracts, ZCTAs, and zip codes that are not mapped. 
+
+```{r read safegraph data, echo = F}
+dat_file <- "safegraph_open_census_data/metadata/cbg_geographic_data.csv"
+cbg_geo  <- fread(paste0(dat_dir, dat_file))
+## manage leading zeros and add census tract
+    cbg_geo <- cbg_geo %>%
+        mutate(census_block_group = str_pad(census_block_group, 12, side = "left", pad = 0)) %>%
+        mutate(census_tract = str_sub(census_block_group, end = -2)) %>%
+        mutate(census_tract = str_pad(census_tract, 11, side = "left", pad = 0))
+    glimpse(cbg_geo)
+```
+
+As a basis, we will use the ``r dat_file`` available from SafeGraph's [Open Census Data](https://www.safegraph.com/open-census-data) which includes some basic CBG features, including longitude and latitude for the CBG centroids (above). 
+
+You can find more information about the data included from the Open Census Data download (including CBG-level demographics) in the [documentation](https://docs.safegraph.com/docs/open-census-data). 
+
+### 2. Crosswalks. 
+
+#### a. Census block group to ZCTA. 
+
+Census block groups do not map up neatly to zip code tabluation areas (ZCTAs). Here, we assign CBGs to the ZCTA containing the block group's centriod. CBG centroids are included in the SafeGraph data set. The implication being that 100% of a CBG falling in one or more ZCTA is counted a single ZCTA.
+
+ZCTA polygons are available for download from the [Census Bureau](https://www.census.gov/cgi-bin/geo/shapefiles/index.php?year=2019&layergroup=ZIP+Code+Tabulation+Areas) ([documendation](https://www2.census.gov/geo/pdfs/maps-data/data/tiger/tgrshp2019/TGRSHP2019_TechDoc.pdf)). 
+
+Note that in order to use `st_join` (spatial join) here, both the points (CBG data) and polygons (ZCTA shapes) need to have the same coordinate reference system (`crs`) encoding. In this case, we check the `crs` value for the ZCTA shapefile and use that when we convert the `cbg_geo` data to a shape object using `st_as_sf`. 
+
+```{r census block group to ZCTA}
+## load zcta shape file
+    dat_file <- "tl_2019_us_zcta510/tl_2019_us_zcta510.shp"
+    zcta_shp <- st_read(paste0(dat_dir, dat_file))
+## convert cgb_geo to a shape object
+    cbg_shp  <- st_as_sf(cbg_geo, coords = c("longitude", "latitude"), crs = 4269)
+## spatial join
+    cbg_zcta <- st_join(zcta_shp, cbg_shp, join = st_contains)
+```
+
+```{r echo = F}
+glimpse(cbg_zcta)
+```
+
+* `r length(unique(cbg_zcta$census_block_group))` distinct CBGs mapped to `r length(unique(cbg_zcta$ZCTA5CE10))` unique ZCTAs. 
+* There are `r length(unique(cbg_shp$census_block_group)) - length(unique(cbg_zcta$census_block_group))` CBGs from the original SafeGraph data set that are not included in the final output. 
+* `r unname(table(is.na(cbg_zcta$census_block_group))[2])` ZCTAs were not mapped to any CBGs. 
+
+
+#### b. Census tract to postal zip code. 
+
+CBGs roll-up neatly into Census tracts, but to not map cleanly to postal zip codes. The [Department of Housing and Urban Development (HUD)](https://www.huduser.gov/portal/datasets/usps_crosswalk.html#codebook) has an existing cross-walk available to map tracts on onto postal zip codes. 
+
+```{r tract to zip, echo = F, message = F}
+## load HUD crosswalk
+    dat_file  <- "TRACT_ZIP_032020.csv"
+    hud_xwlk <- fread(paste0(dat_dir, dat_file))
+    hud_xwlk <- hud_xwlk %>%
+        mutate(TRACT = str_pad(TRACT, 11, side = "left", pad = 0), 
+               ZIP   = str_pad(ZIP,    5, side = "left", pad = 0))
+## summarize to census tract and join with HUD data
+    tract_zip <- cbg_geo %>%
+        group_by(census_tract) %>%
+        summarise(amount_land  = sum(amount_land), 
+                  amount_water = sum(amount_water)) %>%
+        ungroup() %>%
+        full_join(hud_xwlk, 
+                  by = c("census_tract" = "TRACT"))
+    glimpse(tract_zip)
+```
+
+* `r length(unique(tract_zip$census_tract))` distinct census tracts mapped to `r length(unique(tract_zip$ZIP))` unique zip codes. 
+* `r unname(table(is.na(tract_zip$ZIP))[2])` census tracts were not mapped to a zip code.
+* `r unname(table(is.na(tract_zip$census_tract))[2])` zip codes were not mapped to a census tract.
+
+Other Notes: 
+
+* The HUD cross-walk downloaded as an Excel file and I converted it to a CSV before import to avoid column class error messages on import. 
+* `*_RATIO` columns from HUD report the proportion of zip code addresses attributed to a given census tract. 
+* Additional mappings available from HUD (including reversed zip code to census tract).  
+
+
+#### c. Postal zip code to ZCTA. 
+
+The [ZIP code to ZCTA Crosswalk](https://www.udsmapper.org/zcta-crosswalk.cfm) from udsmapper.com can be used to map postal zip codes to Census ZCTAs. Here, each zip code maps to exactly one ZCTA. The data set includes information about the zip-to-ZCTA join type which is summarized below.   
+
+In general, ZCTA is the same as zip code, but not always. More information on ZCTA formation is available from the [US Census Bureau](https://www.census.gov/programs-surveys/geography/guidance/geo-areas/zctas.html)
+
+```{r zip code to zcta, echo = F}
+## load udsmapper crosswalk
+    dat_file <- "zip_to_zcta_2019.xlsx"
+    uds_xwlk <- read_xlsx(paste0(dat_dir, dat_file)) 
+    kable(table(uds_xwlk$zip_join_type))
+```
+
+Here, we join the HUD cross-walk from census tract to zip code with the zip code to ZCTA map as an example. 
+
+```{r echo = F}
+## join on ZCTA
+    tract_zcta <- hud_xwlk %>%
+        full_join(uds_xwlk, 
+              by = c("ZIP" = "ZIP_CODE"))
+    glimpse(tract_zcta)
+```
+
+* `r length(unique(tract_zcta$TRACT))` distinct census tracts mapped to `r length(unique(tract_zcta$ZCTA))` unique ZCTAs. 
+* `r unname(table(is.na(tract_zcta$TRACT))[2])` ZCTAs were not mapped to a census tract.
+* `r unname(table(is.na(tract_zcta$ZCTA))[2])` census tracts were not mapped to a ZCTA.
+
+
